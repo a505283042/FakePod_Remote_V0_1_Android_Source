@@ -18,6 +18,7 @@ ESP32 peer: `FakePod_S31/feat/phone-avrcp-cover-art` (`7c56126` or later).
 - Request BLE MTU 247 *after* GATT initialization; fall back to MTU 23 if needed. Max frame = `min(MTU-3,244)`.
 - BLE cover transfer yields to existing library/Wi-Fi provisioning transfers; existing remote-control write callbacks remain intact.
 - UI: Settings → `手机音乐封面同步 · QQ 音乐诊断（实验）`, opt in/out, check Notification Access, inspect current status.
+- A visible `FakePodPhoneCoverService` foreground notification keeps the original app-owned BLE session alive while QQ Music is in the foreground; no separate BLE connection.
 
 ## Build
 
@@ -50,6 +51,6 @@ java -jar cover-smoke.jar
 - QQ Music might expose no image through MediaSession, content URI or media notification. This depends on the installed Android/QQ versions; the App reports this condition rather than inventing a cover.
 - MediaSession TITLE may contain lyrics; without a stable Media ID, two different tracks sharing artwork, album/artist/duration may need an elapsed-position reset to trigger an upload. This is a heuristic, not guaranteed track ID.
 - A GATT write ACK confirms successful transfer of that fragment, **not that CoverSurface decoded or displayed the JPEG**. Verify S31 serial and UI.
-- MediaSession observation can remain active via Notification Listener after the app is backgrounded, but the existing BLE client still obeys its original background power policy; no new permanent background BLE foreground service was introduced.
+- **Background sync**: when the user enables cover syncing, the App starts a visible `connectedDevice` foreground service so the existing BLE GATT stays alive while QQ Music occupies the screen. Disabling cover sync stops the service and restores the original 30-second background grace period. Android can still stop background services under system resource limits.
 - Firmware's native AVRCP Cover Art and Android fallback share the same Phone CoverSurface cache. Do not enable automatic transmission through Wi-Fi command protocol; this branch uploads over encrypted BLE only.
 - Android Gradle APK build and hardware upload require local SDK/phone: not executed by this GitHub-only change.

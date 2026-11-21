@@ -175,6 +175,12 @@ class FakePodBleClient(private val context: Context) {
         if (foreground) {
             remoteActive = true
             start()
+        } else if (FakePodCoverHub.isEnabled() && FakePodPhoneCoverService.isRunning) {
+            // Keep the original application-owned BLE GATT alive while the
+            // user plays QQ Music in another app. Foreground service provides
+            // an explicit, visible opt-in background execution context.
+            remoteActive = true
+            reconnectEnabled = true
         } else mainHandler.postDelayed(backgroundStop, RemotePowerPolicy.BACKGROUND_GRACE_MS)
     }
     @Volatile private var writeInFlight = false

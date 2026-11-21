@@ -132,6 +132,7 @@ class MainActivity : Activity() {
     override fun onStart() {
         super.onStart()
         bleClient.setRemoteForeground(true)
+        if (FakePodCoverHub.isEnabled() && hasPermissions()) FakePodPhoneCoverService.start(this)
         bleClient.setListener { snapshot ->
             runOnUiThread { updateUi(snapshot) }
         }
@@ -263,6 +264,7 @@ class MainActivity : Activity() {
             REQUEST_BLUETOOTH_PERMISSIONS -> {
                 if (bleClient.hasRequiredPermissions()) {
                     bleClient.start()
+                    if (FakePodCoverHub.isEnabled()) FakePodPhoneCoverService.start(this)
                 } else {
                     updateUi(
                         FakePodBleClient.Snapshot(
@@ -779,6 +781,8 @@ class MainActivity : Activity() {
             .setMessage(message)
             .setPositiveButton(if (enabled) "关闭同步" else "开启同步") { _, _ ->
                 FakePodCoverHub.setEnabled(this, !enabled)
+                if (enabled) FakePodPhoneCoverService.stop(this)
+                else if (hasPermissions()) FakePodPhoneCoverService.start(this)
                 if (!enabled && !allowed) {
                     startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
                 } else if (!enabled) {
