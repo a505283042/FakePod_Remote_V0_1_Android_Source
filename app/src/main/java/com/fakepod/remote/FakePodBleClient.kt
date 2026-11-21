@@ -29,10 +29,6 @@ import android.os.SystemClock
 import android.util.Log
 import java.util.ArrayDeque
 import java.util.UUID
-import com.fakepod.remote.cover.FakePodCoverHub
-import com.fakepod.remote.cover.FakePodCoverPackets
-import com.fakepod.remote.cover.FakePodCoverTransport
-import com.fakepod.remote.cover.FakePodCoverUploader
 
 class FakePodBleClient(private val context: Context) {
 
@@ -123,9 +119,6 @@ class FakePodBleClient(private val context: Context) {
 
         private const val WIFI_PROVISION_CHUNK_BYTES = 16
         private const val WIFI_PROVISION_MAX_BYTES = 96
-        private const val CMD_COVER_BEGIN = 0x40
-        private const val CMD_COVER_DATA = 0x41
-        private const val CMD_COVER_FINISH = 0x42
 
         private const val PREFS = "fakepod_remote"
         private const val PREF_ADDRESS = "device_address"
@@ -151,7 +144,6 @@ class FakePodBleClient(private val context: Context) {
     private var reconnectEnabled = true
     private var remoteActive = true
     private var bleTransferActive = false
-    private var coverTransferActive = false
     private var requestedBlePriority: Int? = null
     private val backgroundStop = Runnable {
         remoteActive = false
@@ -176,105 +168,18 @@ class FakePodBleClient(private val context: Context) {
         if (foreground) {
             remoteActive = true
             start()
-        } else if (FakePodCoverHub.isEnabled() && FakePodPhoneCoverService.isRunning) {
-            // Keep the original application-owned BLE GATT alive while the
-            // user plays QQ Music in another app. Foreground service provides
-            // an explicit, visible opt-in background execution context.
-            remoteActive = true
-            reconnectEnabled = true
         } else mainHandler.postDelayed(backgroundStop, RemotePowerPolicy.BACKGROUND_GRACE_MS)
     }
-    @Volatile private var writeInFlight = false
+    private var writeInFlight = false
     private var subscribeRetryAttempts = 0
     private var pendingDevice: BluetoothDevice? = null
-    @Volatile private var lastCommand: Int? = null
-    @Volatile private var lastVolumeTarget: Int? = null
+    private var lastCommand: Int? = null
+    private var lastVolumeTarget: Int? = null
     private var commandMessageGeneration = 0L
     private val wifiProvisionFrames = ArrayDeque<ByteArray>()
     private var wifiProvisionTransaction = 0
     private var wifiProvisionHandoffPending = false
     private var wifiProvisionSsid = ""
-
-    // Reuse the SAME encrypted BLE Command characteristic. Do not start a
-    // second BluetoothGatt session or overlap outstanding Write Requests.
-    @Volatile private var coverMtu = 23
-    private var coverBound = false
-    private var coverSessionSerial = 0L
-    @Volatile private var coverWriteAck: ((Boolean) -> Unit)? = null
-    private val coverUploader = FakePodCoverUploader(
-        object : FakePodCoverTransport {
-            override val maxPacketBytes: Int
-                get() = FakePodCoverPackets.packetLimit(coverMtu)
-            override fun writeCoverPacket(packet: ByteArray, done: (Boolean) -> Unit) =
-                queueCoverFrame(packet, done)
-            override fun onTransferActive(active: Boolean) {
-                coverTransferActive = active
-                updateBlePriority()
-            }
-            override fun onTransferFinished(
-                ok: Boolean, bytes: Int, packets: Int, elapsedMs: Long
-            ) {
-                Log.i("FakePodCoverPerf",
-                    "BLE upload ok=$ok bytes=$bytes packets=$packets elapsed=${elapsedMs}ms mtu=$coverMtu")
-            }
-        }
-    ) { task -> mainHandler.post { task() } }
-
-    private fun queueCoverFrame(packet: ByteArray, done: (Boolean) -> Unit) {
-        val session = coverSessionSerial
-        val started = SystemClock.elapsedRealtime()
-        fun attempt() {
-            if (session != coverSessionSerial || wifiReady ||
-                snapshot.state != State.READY || !remoteActive) {
-                done(false)
-                return
-            }
-            if (writeInFlight || bleLibraryFrames.isNotEmpty() ||
-                wifiProvisionFrames.isNotEmpty()) {
-                if (SystemClock.elapsedRealtime() - started > 8000L) {
-                    done(false)
-                    return
-                }
-                mainHandler.postDelayed({ attempt() }, 35L)
-                return
-            }
-            coverWriteAck = done
-            val command = packet[0].toInt() and 0xFF
-            if (!writeCommand(command, packet)) {
-                coverWriteAck = null
-                done(false)
-                return
-            }
-            // A lost onCharacteristicWrite callback must not permanently stall
-            // the existing remote-control GATT queue.
-            mainHandler.postDelayed({
-                if (session == coverSessionSerial && coverWriteAck === done) {
-                    coverWriteAck = null
-                    Log.w(TAG_BLE, "封面 GATT Write ACK 超时，断开以恢复控制队列")
-                    closeGatt()
-                    publish(State.ERROR, "BLE 封面分片超时，等待自动重连")
-                    scheduleReconnect()
-                    done(false)
-                }
-            }, 10000L)
-        }
-        mainHandler.post { attempt() }
-    }
-
-    @SuppressLint("MissingPermission")
-    private fun requestCoverMtu(callbackGatt: BluetoothGatt) {
-        if (callbackGatt !== gatt || snapshot.state != State.READY || wifiReady) return
-        val started = callbackGatt.requestMtu(247)
-        if (!started) bindCoverIfReady(callbackGatt)
-        else mainHandler.postDelayed({ bindCoverIfReady(callbackGatt) }, 1600L)
-    }
-
-    private fun bindCoverIfReady(callbackGatt: BluetoothGatt) {
-        if (callbackGatt !== gatt || coverBound || wifiReady ||
-            snapshot.state != State.READY || !remoteActive) return
-        coverBound = true
-        FakePodCoverHub.bindToExistingBle(coverUploader)
-    }
     @Volatile private var wifiReady = false
     @Volatile private var wifiRecoveryPending = false
     private fun wifiSessionConnected(): Boolean = wifiTransport.isConnected()
@@ -316,11 +221,7 @@ class FakePodBleClient(private val context: Context) {
     @SuppressLint("MissingPermission")
     private fun updateBlePriority() {
         if (wifiReady || !remoteActive || snapshot.state != State.READY) return
-        val priority = when {
-            coverTransferActive -> BluetoothGatt.CONNECTION_PRIORITY_HIGH
-            bleTransferActive -> BluetoothGatt.CONNECTION_PRIORITY_BALANCED
-            else -> BluetoothGatt.CONNECTION_PRIORITY_LOW_POWER
-        }
+        val priority = if (bleTransferActive) BluetoothGatt.CONNECTION_PRIORITY_BALANCED else BluetoothGatt.CONNECTION_PRIORITY_LOW_POWER
         if (requestedBlePriority != priority && gatt?.requestConnectionPriority(priority) == true)
             requestedBlePriority = priority
     }
@@ -882,13 +783,6 @@ class FakePodBleClient(private val context: Context) {
     }
 
     private fun resetGattSession() {
-        ++coverSessionSerial
-        coverMtu = 23
-        coverBound = false
-        val oldCoverAck = coverWriteAck
-        coverWriteAck = null
-        if (oldCoverAck != null) mainHandler.post { oldCoverAck(false) }
-        FakePodCoverHub.unbindFromBle()
         // A discarded BLE session no longer owns the discovery pause. Wi-Fi
         // takeover and background suspension must not start another worker.
         if (remoteActive && !wifiReady) {
@@ -901,7 +795,6 @@ class FakePodBleClient(private val context: Context) {
         }
         requestedBlePriority = null
         bleTransferActive = false
-        coverTransferActive = false
         commandCharacteristic = null
         eventCharacteristic = null
         writeInFlight = false
@@ -1129,7 +1022,6 @@ class FakePodBleClient(private val context: Context) {
             )
         )
         updateBlePriority()
-        mainHandler.postDelayed({ requestCoverMtu(callbackGatt) }, 250L)
     }
 
     private fun handleEventRead(
@@ -1205,13 +1097,6 @@ class FakePodBleClient(private val context: Context) {
     }
 
     private val gattCallback = object : BluetoothGattCallback() {
-        override fun onMtuChanged(callbackGatt: BluetoothGatt, mtu: Int, status: Int) {
-            if (callbackGatt !== gatt) return
-            coverMtu = if (status == BluetoothGatt.GATT_SUCCESS) mtu else 23
-            Log.i(TAG_BLE, "BLE 封面 MTU=" + coverMtu + " status=" + status)
-            mainHandler.post { bindCoverIfReady(callbackGatt) }
-        }
-
 
         @SuppressLint("MissingPermission")
         override fun onConnectionStateChange(
@@ -1479,13 +1364,6 @@ class FakePodBleClient(private val context: Context) {
             lastCommand = null
             lastVolumeTarget = null
 
-            if (command == CMD_COVER_BEGIN || command == CMD_COVER_DATA ||
-                command == CMD_COVER_FINISH) {
-                val ack = coverWriteAck
-                coverWriteAck = null
-                mainHandler.post { ack?.invoke(status == BluetoothGatt.GATT_SUCCESS) }
-                return
-            }
             if(command==0x31) {
                 mainHandler.post {
                     if(callbackGatt!==gatt || wifiReady)return@post

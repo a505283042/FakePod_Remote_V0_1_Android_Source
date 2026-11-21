@@ -3,9 +3,6 @@ package com.fakepod.remote
 import android.Manifest
 import android.app.Activity
 import android.app.Dialog
-import android.app.AlertDialog
-import android.app.NotificationManager
-import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
@@ -42,8 +39,6 @@ import android.widget.ScrollView
 import android.widget.Space
 import android.widget.TextView
 import android.widget.Toast
-import com.fakepod.remote.cover.FakePodCoverHub
-import com.fakepod.remote.cover.FakePodMediaCoverListener
 
 class MainActivity : Activity() {
 
@@ -132,7 +127,6 @@ class MainActivity : Activity() {
     override fun onStart() {
         super.onStart()
         bleClient.setRemoteForeground(true)
-        if (FakePodCoverHub.isEnabled() && hasPermissions()) FakePodPhoneCoverService.start(this)
         bleClient.setListener { snapshot ->
             runOnUiThread { updateUi(snapshot) }
         }
@@ -144,7 +138,6 @@ class MainActivity : Activity() {
         super.onResume()
         if (::bleClient.isInitialized) {
             bleClient.recoverWifiConnection()
-            FakePodMediaCoverListener.refreshIfRunning()
             updateSettingsUi(bleClient.currentSnapshot())
         }
     }
@@ -264,7 +257,6 @@ class MainActivity : Activity() {
             REQUEST_BLUETOOTH_PERMISSIONS -> {
                 if (bleClient.hasRequiredPermissions()) {
                     bleClient.start()
-                    if (FakePodCoverHub.isEnabled()) FakePodPhoneCoverService.start(this)
                 } else {
                     updateUi(
                         FakePodBleClient.Snapshot(
@@ -761,41 +753,6 @@ class MainActivity : Activity() {
         return column to value
     }
 
-    private fun showPhoneCoverDialog() {
-        val component = ComponentName(this, FakePodMediaCoverListener::class.java)
-        val allowed = if (Build.VERSION.SDK_INT >= 27) {
-            getSystemService(NotificationManager::class.java)
-                ?.isNotificationListenerAccessGranted(component) == true
-        } else {
-            Settings.Secure.getString(contentResolver, "enabled_notification_listeners")
-                ?.split(":")?.contains(component.flattenToString()) == true
-        }
-        val enabled = FakePodCoverHub.isEnabled()
-        val message = "来源：QQ音乐 / Android MediaSession / 播放通知" +
-            "\n通知访问权限：" + (if (allowed) "已授权" else "未授权") +
-            "\n手机封面同步：" + (if (enabled) "已开启" else "未开启") +
-            "\nBLE 上传状态：" + FakePodCoverHub.status() +
-            "\n\n只有用户开启并授权后才会读取媒体封面。传输仅使用 FakePod 已配对的加密 BLE 控制连接，不访问 QQ 音乐账号。"
-        AlertDialog.Builder(this)
-            .setTitle("手机封面同步 · 诊断")
-            .setMessage(message)
-            .setPositiveButton(if (enabled) "关闭同步" else "开启同步") { _, _ ->
-                FakePodCoverHub.setEnabled(this, !enabled)
-                if (enabled) FakePodPhoneCoverService.stop(this)
-                else if (hasPermissions()) FakePodPhoneCoverService.start(this)
-                if (!enabled && !allowed) {
-                    startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
-                } else if (!enabled) {
-                    FakePodMediaCoverListener.refreshIfRunning()
-                }
-            }
-            .setNeutralButton("通知访问设置") { _, _ ->
-                startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
-            }
-            .setNegativeButton("返回", null)
-            .show()
-    }
-
     private fun showSettingsDialog() {
         val dialog = Dialog(this)
         val panel = LinearLayout(this).apply {
@@ -871,15 +828,6 @@ class MainActivity : Activity() {
             }
         }
         panel.addView(reconnectButton, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(44)))
-        panel.addView(space(8))
-        panel.addView(Button(this).apply {
-            text = "手机音乐封面同步 · QQ 音乐诊断（实验）"
-            isAllCaps = false
-            textSize = 13f
-            setTextColor(COLOR_TEXT)
-            background = roundedDrawable(COLOR_SURFACE_HIGH, 13, COLOR_BORDER)
-            setOnClickListener { showPhoneCoverDialog() }
-        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(44)))
 
         panel.addView(space(14))
         val wifiBox = LinearLayout(this).apply {
@@ -998,7 +946,7 @@ class MainActivity : Activity() {
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
         }, matchWrap())
         panel.addView(TextView(this).apply {
-            text = "Version 0.5.46 Cover Art Speed  ·  FAKEPOD"
+            text = "Version 0.5.19  ·  FAKEPOD"
             textSize = 11f
             setTextColor(COLOR_TEXT_MUTED)
             setPadding(0, dp(4), 0, 0)
