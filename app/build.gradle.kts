@@ -13,8 +13,8 @@ android {
         minSdk = 26
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
         targetSdk = 35
-        versionCode = 57
-        versionName = "0.5.44-library-empty-list-fix"
+        versionCode = 58
+        versionName = "0.5.45-cover-art-experimental"
     }
 
     compileOptions {
