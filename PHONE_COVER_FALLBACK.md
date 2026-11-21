@@ -2,7 +2,7 @@
 
 Branch: `feat/phone-cover-ble-fallback`
 Base: `main` at `640ff29f4f6e6d63a6f8e95121820d241d29163e`
-Android version: `0.5.45-cover-art-experimental` (versionCode 58).
+Android version: `0.5.46-cover-art-speed` (versionCode 59).
 ESP32 peer: `FakePod_S31/feat/phone-avrcp-cover-art` (`7c56126` or later).
 
 ## Scope
@@ -54,3 +54,39 @@ java -jar cover-smoke.jar
 - **Background sync**: when the user enables cover syncing, the App starts a visible `connectedDevice` foreground service so the existing BLE GATT stays alive while QQ Music occupies the screen. Disabling cover sync stops the service and restores the original 30-second background grace period. Android can still stop background services under system resource limits.
 - Firmware's native AVRCP Cover Art and Android fallback share the same Phone CoverSurface cache. Do not enable automatic transmission through Wi-Fi command protocol; this branch uploads over encrypted BLE only.
 - Android Gradle APK build and hardware upload require local SDK/phone: not executed by this GitHub-only change.
+
+## 0.5.46 Speed & observability update
+
+Previous experimental builds kept the BLE connection at `CONNECTION_PRIORITY_LOW_POWER`
+even during image transfer and inserted 12ms after **each** acknowledged GATT packet.
+With hundreds of packets, total artwork latency can be tens of seconds.
+
+- Remove the fixed 12ms delay, leaving normal Handler asynchronous message dispatch.
+- Request `CONNECTION_PRIORITY_HIGH` **only during cover transfers**, then restore
+  the existing low-power profile afterwards; the existing library transfers continue
+  using balanced mode.
+- Keep `WRITE_TYPE_DEFAULT` (acknowledged) and the original 0x40/0x41/0x42
+  protocol; **do not** switch to Write Without Response without changing both ends.
+- Retain the original JPEG quality/resolution until measured results justify a
+  separate bandwidth/quality trade-off.
+- Record `FakePodCoverPerf` logcat for artwork encode time and BLE transfer:
+  JPEG bytes, number of acknowledged packets, transfer duration and MTU.
+- S31 logs `Android album cover complete bytes=...` when the frame stream finishes,
+  and `AVRCP_COVER surface requested...` when the surface work is queued.
+  Completion of a GATT write only means a packet was acknowledged.
+
+For diagnostic capture in PowerShell (use the Android SDK adb path if necessary):
+
+```powershell
+& "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" logcat -s FakePodCoverPerf FakePodBle
+```
+
+Observe whether the log shows `BLE 封面 MTU=247`. With smaller negotiated
+MTU, the same JPEG requires vastly more packets. Also check the S31's
+`A2DP_RX drop` while temporarily using high connection priority; if Bluetooth
+audio starts dropping samples, lower the transfer priority to BALANCED.
+
+**Performance target, not guarantee:** aim for approximately 2–5 seconds for
+moderate-sized JPEGs on compatible phone/BLE links; actual time depends on
+MTU, connection interval, phone stack and JPEG size. The full Android Gradle
+build and phone-to-S31 performance validation remain local tasks.

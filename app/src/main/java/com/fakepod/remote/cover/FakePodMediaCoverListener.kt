@@ -16,6 +16,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
+import android.util.Log
 import java.io.ByteArrayOutputStream
 import java.lang.ref.WeakReference
 import java.util.concurrent.Executors
@@ -155,6 +156,7 @@ class FakePodMediaCoverListener : NotificationListenerService() {
         stableKey = trackId
         lastInspect = now
         val serial = ++revision
+        val detectAt = SystemClock.elapsedRealtime()
         val token = controller.sessionToken
         val appName = if (controller.packageName == "com.tencent.qqmusic")
             "QQ音乐" else controller.packageName
@@ -174,6 +176,9 @@ class FakePodMediaCoverListener : NotificationListenerService() {
                     FakePodCoverHub.mediaStatus(appName + " · JPEG 压缩失败或图片太大")
                     return@execute
                 }
+                Log.i("FakePodCoverPerf",
+                    "Media artwork app=$appName src=${dimension} jpeg=${jpeg.size}B " +
+                        "decodeEncode=${SystemClock.elapsedRealtime() - detectAt}ms")
                 val crc = CRC32().apply { update(jpeg) }.value
                 val key = trackId + "|" + crc
                 main.post {

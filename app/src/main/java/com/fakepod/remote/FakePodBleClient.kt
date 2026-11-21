@@ -151,6 +151,7 @@ class FakePodBleClient(private val context: Context) {
     private var reconnectEnabled = true
     private var remoteActive = true
     private var bleTransferActive = false
+    private var coverTransferActive = false
     private var requestedBlePriority: Int? = null
     private val backgroundStop = Runnable {
         remoteActive = false
@@ -206,8 +207,18 @@ class FakePodBleClient(private val context: Context) {
                 get() = FakePodCoverPackets.packetLimit(coverMtu)
             override fun writeCoverPacket(packet: ByteArray, done: (Boolean) -> Unit) =
                 queueCoverFrame(packet, done)
+            override fun onTransferActive(active: Boolean) {
+                coverTransferActive = active
+                updateBlePriority()
+            }
+            override fun onTransferFinished(
+                ok: Boolean, bytes: Int, packets: Int, elapsedMs: Long
+            ) {
+                Log.i("FakePodCoverPerf",
+                    "BLE upload ok=$ok bytes=$bytes packets=$packets elapsed=${elapsedMs}ms mtu=$coverMtu")
+            }
         }
-    ) { task -> mainHandler.postDelayed({ task() }, 12L) }
+    ) { task -> mainHandler.post { task() } }
 
     private fun queueCoverFrame(packet: ByteArray, done: (Boolean) -> Unit) {
         val session = coverSessionSerial
@@ -305,7 +316,11 @@ class FakePodBleClient(private val context: Context) {
     @SuppressLint("MissingPermission")
     private fun updateBlePriority() {
         if (wifiReady || !remoteActive || snapshot.state != State.READY) return
-        val priority = if (bleTransferActive) BluetoothGatt.CONNECTION_PRIORITY_BALANCED else BluetoothGatt.CONNECTION_PRIORITY_LOW_POWER
+        val priority = when {
+            coverTransferActive -> BluetoothGatt.CONNECTION_PRIORITY_HIGH
+            bleTransferActive -> BluetoothGatt.CONNECTION_PRIORITY_BALANCED
+            else -> BluetoothGatt.CONNECTION_PRIORITY_LOW_POWER
+        }
         if (requestedBlePriority != priority && gatt?.requestConnectionPriority(priority) == true)
             requestedBlePriority = priority
     }
@@ -886,6 +901,7 @@ class FakePodBleClient(private val context: Context) {
         }
         requestedBlePriority = null
         bleTransferActive = false
+        coverTransferActive = false
         commandCharacteristic = null
         eventCharacteristic = null
         writeInFlight = false

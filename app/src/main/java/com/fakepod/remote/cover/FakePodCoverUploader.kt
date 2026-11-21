@@ -7,6 +7,9 @@ package com.fakepod.remote.cover
 interface FakePodCoverTransport {
     val maxPacketBytes: Int
     fun writeCoverPacket(packet: ByteArray, done: (Boolean) -> Unit)
+    // Raise BLE connection priority only while transmitting JPEG chunks.
+    fun onTransferActive(active: Boolean) {}
+    fun onTransferFinished(ok: Boolean, bytes: Int, packets: Int, elapsedMs: Long) {}
 }
 
 /** Single-looper state machine, latest album art wins over an in-progress transfer. */
@@ -21,7 +24,9 @@ class FakePodCoverUploader(
         val jpeg: ByteArray,
         val complete: (Boolean) -> Unit,
         var offset: Int = 0,
-        var phase: Phase = Phase.BEGIN
+        var phase: Phase = Phase.BEGIN,
+        val startedNs: Long = System.nanoTime(),
+        var packetCount: Int = 0
     )
     private var sequence = 0L
     private var txSequence = 1
@@ -35,7 +40,11 @@ class FakePodCoverUploader(
                 complete(false)
                 return@dispatch
             }
-            active?.complete?.invoke(false)
+            active?.let { old ->
+                transport.onTransferFinished(false, old.jpeg.size, old.packetCount,
+                    (System.nanoTime() - old.startedNs) / 1_000_000L)
+                old.complete(false)
+            } ?: transport.onTransferActive(true)
             active = Work(++sequence, txSequence++ and 0xFF, image, complete)
             pump()
         }
@@ -44,7 +53,12 @@ class FakePodCoverUploader(
     fun cancel() {
         dispatch {
             ++sequence
-            active?.complete?.invoke(false)
+            active?.let { old ->
+                transport.onTransferFinished(false, old.jpeg.size, old.packetCount,
+                    (System.nanoTime() - old.startedNs) / 1_000_000L)
+                old.complete(false)
+                transport.onTransferActive(false)
+            }
             active = null
         }
     }
@@ -65,9 +79,13 @@ class FakePodCoverUploader(
                 if (work == null || work.serial != serial) return@dispatch
                 if (!accepted) {
                     active = null
+                    transport.onTransferFinished(false, work.jpeg.size, work.packetCount,
+                        (System.nanoTime() - work.startedNs) / 1_000_000L)
+                    transport.onTransferActive(false)
                     work.complete(false)
                     return@dispatch
                 }
+                ++work.packetCount
                 when (work.phase) {
                     Phase.BEGIN -> work.phase = Phase.DATA
                     Phase.DATA -> {
@@ -76,6 +94,9 @@ class FakePodCoverUploader(
                     }
                     Phase.FINISH -> {
                         active = null
+                        transport.onTransferFinished(true, work.jpeg.size, work.packetCount,
+                            (System.nanoTime() - work.startedNs) / 1_000_000L)
+                        transport.onTransferActive(false)
                         work.complete(true)
                         return@dispatch
                     }

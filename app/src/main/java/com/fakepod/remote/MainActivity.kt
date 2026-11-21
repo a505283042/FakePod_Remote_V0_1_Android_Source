@@ -998,7 +998,7 @@ class MainActivity : Activity() {
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
         }, matchWrap())
         panel.addView(TextView(this).apply {
-            text = "Version 0.5.45 Cover Art Test  ·  FAKEPOD"
+            text = "Version 0.5.46 Cover Art Speed  ·  FAKEPOD"
             textSize = 11f
             setTextColor(COLOR_TEXT_MUTED)
             setPadding(0, dp(4), 0, 0)
