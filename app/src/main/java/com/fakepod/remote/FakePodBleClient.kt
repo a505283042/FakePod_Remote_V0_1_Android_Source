@@ -78,6 +78,9 @@ class FakePodBleClient(private val context: Context) {
         val seekFeedbackSerial: Long = -1L,
         val visualControlFlags: Int = 0,
         val spectrumStyle: Int = -1,
+        val sleepTimerMinutes: Int = -1,
+        val brightnessLevel: Int = -1,          // -1=未同步；设备范围 5~100
+        val audioOutputMode: Int = -1,          // -1=未同步；0=普通耳机 1=线路输出 2=高阻耳机
         val screenLocked: Boolean = false
     )
 
@@ -99,6 +102,9 @@ class FakePodBleClient(private val context: Context) {
         private const val EVENT_PROTOCOL_VERSION = 1
         private const val EVENT_STATUS = 0x01
         private const val EVENT_METADATA = 0x02
+        private const val EVENT_SLEEP_TIMER = 0x08
+        private const val EVENT_BRIGHTNESS = 0x09
+        private const val EVENT_OUTPUT_MODE = 0x0A
 
         const val CMD_PLAY_PAUSE = 0x01
         const val CMD_NEXT = 0x02
@@ -115,6 +121,9 @@ class FakePodBleClient(private val context: Context) {
         const val CMD_CASSETTE_COVER_SHIFT = 0x16
         const val CMD_SPECTRUM_STYLE = 0x17
         const val CMD_LOCAL_SEEK = 0x18
+        const val CMD_SLEEP_TIMER = 0x19
+        const val CMD_BRIGHTNESS = 0x1A
+        const val CMD_OUTPUT_MODE = 0x1B
         const val CMD_WIFI_PROVISION = 0x20
 
         private const val WIFI_PROVISION_CHUNK_BYTES = 16
@@ -252,7 +261,8 @@ class FakePodBleClient(private val context: Context) {
             address = address,
             wifiConnected = true,
             musicForeground = false,
-            visualControlFlags = 0, spectrumStyle = -1,
+            visualControlFlags = 0, spectrumStyle = -1, sleepTimerMinutes = -1,
+            brightnessLevel = -1, audioOutputMode = -1,
             seekRemoteSupported = false, seekTrack = null, seekPlaybackRevision = 0L
         ))
     }
@@ -268,7 +278,8 @@ class FakePodBleClient(private val context: Context) {
             message = "Wi-Fi 控制断开：$reason；自动重连中…",
             wifiConnected = false,
             musicForeground = false,
-            visualControlFlags = 0, spectrumStyle = -1,
+            visualControlFlags = 0, spectrumStyle = -1, sleepTimerMinutes = -1,
+            brightnessLevel = -1, audioOutputMode = -1,
             seekRemoteSupported = false, seekTrack = null, seekPlaybackRevision = 0L
         ))
         scheduleReconnect()
@@ -650,6 +661,28 @@ class FakePodBleClient(private val context: Context) {
     fun setSpectrumStyle(style: Int): Boolean =
         style in 0..2 && sendVisualCommand(CMD_SPECTRUM_STYLE, style, 3, 2)
 
+    // 睡眠关机定时：运行时档位，0=关闭，其余 30/60/90/120 分钟。系统设置，不要求音乐前台。
+    fun setSleepTimer(minutes: Int): Boolean {
+        if (minutes !in listOf(0, 30, 60, 90, 120)) return false
+        val payload = byteArrayOf(CMD_SLEEP_TIMER.toByte(), minutes.toByte())
+        // Wi-Fi 直连时不要求 BLE READY；BLE 路径由 writeCommand 内部校验连接状态。
+        return if (wifiReady) wifiTransport.send(payload) else writeCommand(CMD_SLEEP_TIMER, payload)
+    }
+
+    // 屏幕亮度：设备范围 5~100%，0 保留给熄屏。系统设置，不要求音乐前台。
+    fun setBrightness(level: Int): Boolean {
+        if (level !in 5..100) return false
+        val payload = byteArrayOf(CMD_BRIGHTNESS.toByte(), level.toByte())
+        return if (wifiReady) wifiTransport.send(payload) else writeCommand(CMD_BRIGHTNESS, payload)
+    }
+
+    // 音频输出模式：0=普通耳机 1=线路输出 2=高阻耳机。系统设置，不要求音乐前台。
+    fun setAudioOutputMode(mode: Int): Boolean {
+        if (mode !in 0..2) return false
+        val payload = byteArrayOf(CMD_OUTPUT_MODE.toByte(), mode.toByte())
+        return if (wifiReady) wifiTransport.send(payload) else writeCommand(CMD_OUTPUT_MODE, payload)
+    }
+
     private fun sendVisualCommand(command: Int, value: Int, view: Int, capability: Int): Boolean {
         if (!musicUiAvailable() || snapshot.musicView != view ||
             snapshot.visualControlFlags and capability == 0 ||
@@ -908,6 +941,27 @@ class FakePodBleClient(private val context: Context) {
         publishCurrentSnapshot(snapshot.copy(visualControlFlags = flags and 3, spectrumStyle = style))
     }
 
+    private fun handleSleepTimerPacket(data: ByteArray) {
+        if (data.size != 3 || (data[1].toInt() and 0xFF) != EVENT_PROTOCOL_VERSION) return
+        val minutes = data[2].toInt() and 0xFF
+        if (minutes !in listOf(0, 30, 60, 90, 120)) return
+        publishCurrentSnapshot(snapshot.copy(sleepTimerMinutes = minutes))
+    }
+
+    private fun handleBrightnessPacket(data: ByteArray) {
+        if (data.size != 3 || (data[1].toInt() and 0xFF) != EVENT_PROTOCOL_VERSION) return
+        val level = data[2].toInt() and 0xFF
+        if (level !in 5..100) return   // 0 是设备未就绪占位，忽略
+        publishCurrentSnapshot(snapshot.copy(brightnessLevel = level))
+    }
+
+    private fun handleOutputModePacket(data: ByteArray) {
+        if (data.size != 3 || (data[1].toInt() and 0xFF) != EVENT_PROTOCOL_VERSION) return
+        val mode = data[2].toInt() and 0xFF
+        if (mode !in 0..2) return
+        publishCurrentSnapshot(snapshot.copy(audioOutputMode = mode))
+    }
+
     private fun handleLocalSeekPacket(data: ByteArray) {
         val feedback = LocalSeekWire.decode(data) ?: return
         publishCurrentSnapshot(snapshot.copy(
@@ -963,6 +1017,9 @@ class FakePodBleClient(private val context: Context) {
             0x03 -> handleRemoteUiPacket(data)
             0x04 -> handleVisualControlsPacket(data)
             0x05 -> handleLocalSeekPacket(data)
+            EVENT_SLEEP_TIMER -> handleSleepTimerPacket(data)
+            EVENT_BRIGHTNESS -> handleBrightnessPacket(data)
+            EVENT_OUTPUT_MODE -> handleOutputModePacket(data)
             0x06 -> if (wifiReady) musicLibrary.onFrame(data)
             0x07 -> if(!wifiReady)mainHandler.post {
                 if(wifiReady)return@post
@@ -1016,7 +1073,8 @@ class FakePodBleClient(private val context: Context) {
                 message = "FakePod 蓝牙已连接",
                 address = callbackGatt.device.address,
                 wifiConnected = false,
-                visualControlFlags = 0, spectrumStyle = -1,
+                visualControlFlags = 0, spectrumStyle = -1, sleepTimerMinutes = -1,
+            brightnessLevel = -1, audioOutputMode = -1,
                 seekRemoteSupported = false, seekTrack = null, seekPlaybackRevision = 0L,
                 musicForeground = false
             )
@@ -1067,6 +1125,9 @@ class FakePodBleClient(private val context: Context) {
             CMD_CASSETTE_COVER_SHIFT -> "封面位置"
             CMD_SPECTRUM_STYLE -> "频谱模式"
             CMD_LOCAL_SEEK -> "定位"
+            CMD_SLEEP_TIMER -> "睡眠关机定时"
+            CMD_BRIGHTNESS -> "屏幕亮度"
+            CMD_OUTPUT_MODE -> "音频输出模式"
             CMD_WIFI_PROVISION -> "Wi-Fi配网"
             else -> "未知命令"
         }

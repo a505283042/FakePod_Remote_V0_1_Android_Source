@@ -101,6 +101,11 @@ class MainActivity : Activity() {
     private lateinit var screenDropdown: TextView
     private lateinit var cassetteControls: LinearLayout
     private lateinit var spectrumControls: LinearLayout
+    private var sleepTimerButton: ImageButton? = null
+    private var brightnessButton: ImageButton? = null
+    private var outputModeButton: ImageButton? = null
+    private val brightnessHandler = Handler(Looper.getMainLooper())
+    private var brightnessRunnable: Runnable? = null
     private lateinit var spectrumStyleDropdown: TextView
     private val coverShiftButtons = mutableListOf<Button>()
 
@@ -354,6 +359,45 @@ class MainActivity : Activity() {
             titleColumn,
             LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         )
+
+        val outputButton = ImageButton(this).apply {
+            setImageResource(R.drawable.ic_output)
+            imageTintList = ColorStateList.valueOf(COLOR_TEXT_SECONDARY)
+            contentDescription = "音频输出模式"
+            setPadding(dp(10), dp(10), dp(10), dp(10))
+            background = roundedDrawable(COLOR_SURFACE, 12, COLOR_BORDER)
+            stateListAnimator = null
+            setOnClickListener { showOutputModeDialog() }
+        }
+        outputModeButton = outputButton
+        row.addView(outputButton, LinearLayout.LayoutParams(dp(40), dp(40)))
+        row.addView(spaceHorizontal(8))
+
+        val sunButton = ImageButton(this).apply {
+            setImageResource(R.drawable.ic_sun)
+            imageTintList = ColorStateList.valueOf(COLOR_TEXT_SECONDARY)
+            contentDescription = "屏幕亮度"
+            setPadding(dp(10), dp(10), dp(10), dp(10))
+            background = roundedDrawable(COLOR_SURFACE, 12, COLOR_BORDER)
+            stateListAnimator = null
+            setOnClickListener { showBrightnessDialog() }
+        }
+        brightnessButton = sunButton
+        row.addView(sunButton, LinearLayout.LayoutParams(dp(40), dp(40)))
+        row.addView(spaceHorizontal(8))
+
+        val moonButton = ImageButton(this).apply {
+            setImageResource(R.drawable.ic_moon)
+            imageTintList = ColorStateList.valueOf(COLOR_TEXT_SECONDARY)
+            contentDescription = "睡眠关机"
+            setPadding(dp(10), dp(10), dp(10), dp(10))
+            background = roundedDrawable(COLOR_SURFACE, 12, COLOR_BORDER)
+            stateListAnimator = null
+            setOnClickListener { showSleepTimerDialog() }
+        }
+        sleepTimerButton = moonButton
+        row.addView(moonButton, LinearLayout.LayoutParams(dp(40), dp(40)))
+        row.addView(spaceHorizontal(8))
 
         val settingsButton = ImageButton(this).apply {
             setImageResource(R.drawable.ic_settings)
@@ -751,6 +795,248 @@ class MainActivity : Activity() {
             LinearLayout.LayoutParams.MATCH_PARENT, dp(38)
         ))
         return column to value
+    }
+
+    private fun showSleepTimerDialog() {
+        val dialog = Dialog(this)
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(16), dp(18), dp(16))
+            minimumWidth = dp(220)
+            background = roundedDrawable(COLOR_SURFACE, 20, COLOR_BORDER)
+        }
+
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        header.addView(TextView(this).apply {
+            text = "睡眠关机定时"
+            textSize = 18f
+            setTextColor(COLOR_TEXT)
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        header.addView(TextView(this).apply {
+            text = "×"
+            textSize = 22f
+            setTextColor(COLOR_TEXT_MUTED)
+            setPadding(dp(8), 0, dp(2), 0)
+            setOnClickListener { dialog.dismiss() }
+        })
+        panel.addView(header, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        panel.addView(TextView(this).apply {
+            text = "到点保存选曲后进入深度睡眠，唤醒后自动关闭。"
+            textSize = 12f
+            setTextColor(COLOR_TEXT_MUTED)
+            setPadding(0, dp(4), 0, dp(10))
+        }, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+
+        val options = listOf(0 to "关闭", 30 to "30 分钟", 60 to "60 分钟", 90 to "90 分钟", 120 to "120 分钟")
+        val current = bleClient.currentSnapshot().sleepTimerMinutes
+        for ((value, label) in options) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(12), dp(12), dp(12), dp(12))
+                background = roundedDrawable(COLOR_SURFACE_HIGH, 12, COLOR_BORDER)
+                setOnClickListener {
+                    if (bleClient.setSleepTimer(value)) {
+                        dialog.dismiss()
+                    } else {
+                        Toast.makeText(this@MainActivity, "设置失败，请确认设备已连接",
+                            Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+            row.addView(TextView(this).apply {
+                text = label
+                textSize = 15f
+                setTextColor(COLOR_TEXT)
+            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            row.addView(TextView(this).apply {
+                text = if (value == current) "✓" else ""
+                textSize = 16f
+                setTextColor(COLOR_ACCENT)
+            })
+            panel.addView(row, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = dp(6)
+            })
+        }
+
+        dialog.setContentView(panel)
+        dialog.setCanceledOnTouchOutside(true)
+        dialog.window?.apply {
+            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            addFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+            attributes = attributes.apply { dimAmount = 0.58f }
+        }
+        dialog.show()
+    }
+
+    private fun showBrightnessDialog() {
+        val dialog = Dialog(this)
+        val snap = bleClient.currentSnapshot()
+        val initial = if (snap.brightnessLevel in 5..100) snap.brightnessLevel else 60
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(16), dp(18), dp(16))
+            minimumWidth = dp(240)
+            background = roundedDrawable(COLOR_SURFACE, 20, COLOR_BORDER)
+        }
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        header.addView(TextView(this).apply {
+            text = "屏幕亮度"
+            textSize = 18f
+            setTextColor(COLOR_TEXT)
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        val valueText = TextView(this).apply {
+            text = "$initial%"
+            textSize = 16f
+            setTextColor(COLOR_ACCENT)
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        }
+        header.addView(valueText)
+        header.addView(TextView(this).apply {
+            text = "×"
+            textSize = 22f
+            setTextColor(COLOR_TEXT_MUTED)
+            setPadding(dp(10), 0, dp(2), 0)
+            setOnClickListener { dialog.dismiss() }
+        })
+        panel.addView(header, matchWrap())
+        panel.addView(space(8))
+
+        val seekBar = SeekBar(this).apply {
+            max = 100
+            progress = initial
+            progressTintList = ColorStateList.valueOf(COLOR_ACCENT)
+            thumbTintList = ColorStateList.valueOf(COLOR_ACCENT)
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seek: SeekBar, progress: Int, fromUser: Boolean) {
+                    val level = progress.coerceIn(5, 100)
+                    if (level != progress) seek.progress = level
+                    valueText.text = "$level%"
+                    if (fromUser) {
+                        brightnessRunnable?.let { brightnessHandler.removeCallbacks(it) }
+                        val r = Runnable { bleClient.setBrightness(level) }
+                        brightnessRunnable = r
+                        brightnessHandler.postDelayed(r, 300)
+                    }
+                }
+                override fun onStartTrackingTouch(seek: SeekBar) {}
+                override fun onStopTrackingTouch(seek: SeekBar) {
+                    brightnessRunnable?.let { brightnessHandler.removeCallbacks(it) }
+                    brightnessRunnable = null
+                    bleClient.setBrightness(seek.progress.coerceIn(5, 100))
+                }
+            })
+        }
+        panel.addView(seekBar, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(4)
+        })
+        panel.addView(TextView(this).apply {
+            text = "拖动实时调节，松手生效。范围 5%~100%。"
+            textSize = 11f
+            setTextColor(COLOR_TEXT_MUTED)
+            setPadding(0, dp(8), 0, 0)
+        }, matchWrap())
+
+        dialog.setContentView(panel)
+        dialog.setCanceledOnTouchOutside(true)
+        dialog.setOnDismissListener {
+            brightnessRunnable?.let { brightnessHandler.removeCallbacks(it) }
+            brightnessRunnable = null
+        }
+        dialog.window?.apply {
+            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            addFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+            attributes = attributes.apply { dimAmount = 0.58f }
+        }
+        dialog.show()
+    }
+
+    private fun showOutputModeDialog() {
+        val dialog = Dialog(this)
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(16), dp(18), dp(16))
+            minimumWidth = dp(220)
+            background = roundedDrawable(COLOR_SURFACE, 20, COLOR_BORDER)
+        }
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        header.addView(TextView(this).apply {
+            text = "音频输出模式"
+            textSize = 18f
+            setTextColor(COLOR_TEXT)
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        header.addView(TextView(this).apply {
+            text = "×"
+            textSize = 22f
+            setTextColor(COLOR_TEXT_MUTED)
+            setPadding(dp(8), 0, dp(2), 0)
+            setOnClickListener { dialog.dismiss() }
+        })
+        panel.addView(header, matchWrap())
+        panel.addView(TextView(this).apply {
+            text = "切换 CS43131 模拟输出档位，立即生效并保存。"
+            textSize = 12f
+            setTextColor(COLOR_TEXT_MUTED)
+            setPadding(0, dp(4), 0, dp(10))
+        }, matchWrap())
+
+        val options = listOf(0 to "普通耳机", 2 to "高阻耳机", 1 to "线路输出")
+        val current = bleClient.currentSnapshot().audioOutputMode
+        for ((value, label) in options) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(12), dp(12), dp(12), dp(12))
+                background = roundedDrawable(COLOR_SURFACE_HIGH, 12, COLOR_BORDER)
+                setOnClickListener {
+                    if (bleClient.setAudioOutputMode(value)) {
+                        dialog.dismiss()
+                    } else {
+                        Toast.makeText(this@MainActivity, "设置失败，请确认设备已连接",
+                            Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+            row.addView(TextView(this).apply {
+                text = label
+                textSize = 15f
+                setTextColor(COLOR_TEXT)
+            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            row.addView(TextView(this).apply {
+                text = if (value == current) "✓" else ""
+                textSize = 16f
+                setTextColor(COLOR_ACCENT)
+            })
+            panel.addView(row, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = dp(6)
+            })
+        }
+
+        dialog.setContentView(panel)
+        dialog.setCanceledOnTouchOutside(true)
+        dialog.window?.apply {
+            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            addFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+            attributes = attributes.apply { dimAmount = 0.58f }
+        }
+        dialog.show()
     }
 
     private fun showSettingsDialog() {
@@ -1171,6 +1457,26 @@ class MainActivity : Activity() {
         volumeSlider.isEnabled = ready
         volumeSlider.alpha = if (ready) 1f else 0.38f
         playPauseButton.text = if (snapshot.playbackState == 4) "Ⅱ" else "▶"
+        // 睡眠关机：定时生效时月亮高亮为强调色，未连接时置灰。
+        val sleepActive = ready && snapshot.sleepTimerMinutes > 0
+        sleepTimerButton?.isEnabled = ready
+        sleepTimerButton?.alpha = if (ready) 1f else 0.38f
+        sleepTimerButton?.imageTintList = ColorStateList.valueOf(
+            if (sleepActive) COLOR_ACCENT else COLOR_TEXT_SECONDARY
+        )
+        // 屏幕亮度 / 输出模式：已与设备同步则高亮为强调色，未连接时置灰。
+        val brightnessReady = ready && snapshot.brightnessLevel in 5..100
+        brightnessButton?.isEnabled = ready
+        brightnessButton?.alpha = if (ready) 1f else 0.38f
+        brightnessButton?.imageTintList = ColorStateList.valueOf(
+            if (brightnessReady) COLOR_ACCENT else COLOR_TEXT_SECONDARY
+        )
+        val outputReady = ready && snapshot.audioOutputMode in 0..2
+        outputModeButton?.isEnabled = ready
+        outputModeButton?.alpha = if (ready) 1f else 0.38f
+        outputModeButton?.imageTintList = ColorStateList.valueOf(
+            if (outputReady) COLOR_ACCENT else COLOR_TEXT_SECONDARY
+        )
         updateSettingsUi(snapshot)
     }
 
