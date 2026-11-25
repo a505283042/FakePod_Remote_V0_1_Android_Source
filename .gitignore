@@ -7,3 +7,8 @@ local.properties
 *.log
 __pycache__/
 *.pyc
+
+# 开发过程历史日志，不纳入版本控制
+UPDATE_*.md
+VALIDATION_*.md
+NAS_MOBILE_UPDATE_*.md
